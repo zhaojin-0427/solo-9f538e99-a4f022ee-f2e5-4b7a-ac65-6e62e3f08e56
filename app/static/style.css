@@ -304,6 +304,13 @@ tbody tr:hover { background: #fafcfb; }
   line-height: 1.6;
 }
 
+.subhead { margin: 20px 0 8px; font-size: 14px; }
+
+#integrity-detail .table-wrap { margin-top: 4px; }
+#integrity-issues { margin-top: 4px; }
+#integrity-issues .conflict-item { border-color: var(--line); }
+#integrity-banner { margin-top: 4px; }
+
 .footer {
   text-align: center;
   color: var(--muted);

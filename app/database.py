@@ -41,6 +41,32 @@ CREATE TABLE IF NOT EXISTS previews (
 
 CREATE INDEX IF NOT EXISTS idx_previews_date_status
     ON previews (date, status);
+
+-- Integrity digests captured at publish time, one row per (date, version).
+-- The digest commits to every published record of that day (station, hour,
+-- revision, value and source batch) as of that version.
+CREATE TABLE IF NOT EXISTS day_digests (
+    date         TEXT    NOT NULL,
+    version      INTEGER NOT NULL CHECK (version >= 0),
+    digest       TEXT    NOT NULL,
+    record_count INTEGER NOT NULL CHECK (record_count >= 0),
+    created_at   TEXT    NOT NULL,
+    PRIMARY KEY (date, version)
+);
+
+-- Per-record hashes behind each day digest, so verification can pinpoint
+-- exactly which station/hour entries were altered, removed or injected.
+CREATE TABLE IF NOT EXISTS day_digest_entries (
+    date       TEXT NOT NULL,
+    version    INTEGER NOT NULL,
+    station    TEXT NOT NULL,
+    hour       TEXT NOT NULL,
+    entry_hash TEXT NOT NULL,
+    PRIMARY KEY (date, version, station, hour)
+);
+
+CREATE INDEX IF NOT EXISTS idx_day_digest_entries_date
+    ON day_digest_entries (date, version);
 """
 
 

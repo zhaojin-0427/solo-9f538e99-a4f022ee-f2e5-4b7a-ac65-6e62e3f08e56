@@ -18,6 +18,7 @@
     <nav class="nav" aria-label="主导航">
       <a href="#upload" class="nav-link active">上传与预览</a>
       <a href="#published" class="nav-link">已发布数据</a>
+      <a href="#integrity" class="nav-link">完整性核验</a>
     </nav>
   </header>
 
@@ -137,10 +138,54 @@
         <pre id="day-json" class="json-view"></pre>
       </div>
     </section>
+
+    <section id="integrity" class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>完整性核验</h2>
+          <p class="hint">将已发布数据与发布时留存的完整性摘要逐一比对，判断该日数据是否仍可供分析。</p>
+        </div>
+        <button type="button" id="refresh-integrity" class="ghost">重新核验</button>
+      </div>
+      <div id="integrity-list" class="days-list"><p class="empty">正在加载…</p></div>
+
+      <div id="integrity-detail" hidden>
+        <div class="panel-head sub">
+          <div>
+            <h3 id="integrity-title"></h3>
+            <p class="hint" id="integrity-subtitle"></p>
+          </div>
+        </div>
+
+        <div id="integrity-banner" class="alert" hidden></div>
+
+        <h4 class="subhead">版本摘要留存</h4>
+        <div class="table-wrap">
+          <table id="integrity-versions-table">
+            <thead>
+              <tr>
+                <th class="num">日版本</th>
+                <th class="num">记录数</th>
+                <th>摘要（SHA-256）</th>
+                <th>留存时间</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <p id="integrity-no-versions" class="empty" hidden>该日没有任何已留存的完整性摘要。</p>
+        </div>
+
+        <div id="integrity-issues-panel" hidden>
+          <h4 class="subhead">异常原因</h4>
+          <div id="integrity-issues" class="conflict-list"></div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <footer class="footer">
-    <span>同站同小时以最高修订号为准 · 同修订号数值不一致则整批拒绝 · 发布为原子事务</span>
+    <span>同站同小时以最高修订号为准 · 同修订号数值不一致则整批拒绝 · 发布为原子事务 · 每次发布留存完整性摘要，核验不通过的日期不对外返回读数</span>
   </footer>
 
   <script src="/static/app.js"></script>

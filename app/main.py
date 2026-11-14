@@ -110,6 +110,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     async def days() -> dict:
         return service.list_days(app.state.db_path)
 
+    @app.get("/api/integrity")
+    async def integrity_overview() -> dict:
+        return service.get_integrity_overview(app.state.db_path)
+
     def _validate_day(day: str) -> JSONResponse | None:
         if not DATE_PATTERN.match(day):
             return JSONResponse(
@@ -124,6 +128,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 content={"error": "invalid_date", "message": "日期不是有效的日历日期"},
             )
         return None
+
+    @app.get("/api/integrity/{day}")
+    async def integrity_detail(day: str) -> dict:
+        invalid = _validate_day(day)
+        if invalid is not None:
+            return invalid
+        return service.get_integrity_detail(app.state.db_path, day)
 
     @app.get("/api/days/{day}.json")
     async def day_json(day: str) -> JSONResponse:

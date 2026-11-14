@@ -386,6 +386,7 @@
         renderPublishedResult(data.result || data, false, data.already_published);
         setStatus(confirmStatus, "");
         await loadDays();
+        loadIntegrity();
         if (publishedDay === preview.date) await loadDay(preview.date);
       } else if (data && data.error === "preview_stale") {
         preview.status = "stale";
@@ -490,7 +491,11 @@
     try {
       const response = await fetch(`/api/days/${day}`);
       const data = await readJson(response);
-      if (!response.ok) throw new Error((data && data.message) || "无法读取该日数据");
+      if (!response.ok) {
+        const error = new Error((data && data.message) || "无法读取该日数据");
+        error.code = data && data.error;
+        throw error;
+      }
       title.textContent = `${formatDate(day)} · 已发布 JSON`;
       subtitle.textContent = `${data.count} 条记录 · 日版本 v${data.day_version}`;
       pre.textContent = JSON.stringify(data, null, 2);
@@ -501,7 +506,10 @@
       viewer.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       title.textContent = `${formatDate(day)} · 加载失败`;
-      subtitle.textContent = error.message;
+      subtitle.textContent =
+        error.code === "integrity_check_failed"
+          ? `${error.message} 请前往「完整性核验」查看版本与异常原因。`
+          : error.message;
       pre.textContent = "";
       viewer.hidden = false;
     }
@@ -521,11 +529,185 @@
 
   $("#refresh-days").addEventListener("click", loadDays);
 
+  /* ---------------- integrity verification ---------------- */
+
+  const INTEGRITY_STATUS = {
+    ok: { label: "通过", badge: "add" },
+    mismatch: { label: "异常", badge: "conflict" },
+    unverified: { label: "未核验", badge: "ignore" },
+    no_data: { label: "无数据", badge: "ignore" },
+  };
+
+  const INTEGRITY_REASONS = {
+    legacy_no_digest: "该日数据早于核验机制入库，没有完整性摘要，无法确认是否被改动",
+    missing_digest_for_current_version: "当前版本缺少完整性摘要（历史版本留有摘要），状态可疑",
+    digest_mismatch: "当前数据与发布时留存的摘要不符，疑似在入库后被改动",
+    no_published_records: "该日没有已发布记录",
+  };
+
+  const ISSUE_LABELS = {
+    record_modified: "记录与发布摘要不符（数值、修订号或来源批次被改动）",
+    record_missing: "发布时存在的记录已被删除",
+    record_unexpected: "出现了发布摘要之外的来源不明记录",
+    digest_mismatch: "整体摘要不符",
+  };
+
+  function integrityBadge(status) {
+    const info = INTEGRITY_STATUS[status] || { label: status, badge: "ignore" };
+    return `<span class="badge ${info.badge}">${info.label}</span>`;
+  }
+
+  async function loadIntegrity() {
+    const holder = $("#integrity-list");
+    try {
+      const response = await fetch("/api/integrity");
+      const data = await readJson(response);
+      if (!response.ok) throw new Error((data && data.message) || "无法执行完整性核验");
+      const days = (data && data.days) || [];
+      holder.innerHTML = "";
+      if (!days.length) {
+        const p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = "还没有已发布的数据可供核验。";
+        holder.appendChild(p);
+        $("#integrity-detail").hidden = true;
+        return;
+      }
+      days.forEach((day) => {
+        const row = document.createElement("div");
+        row.className = "day-row";
+        const digestInfo =
+          day.digest_version !== null
+            ? `摘要版本 v${day.digest_version}`
+            : "无摘要";
+        const issues = day.issue_count ? ` · ${day.issue_count} 项异常` : "";
+        row.innerHTML = `
+          <div>
+            <div class="date">${formatDate(day.date)} <span class="mono">${day.date}</span> ${integrityBadge(day.status)}</div>
+            <div class="stats">日版本 v${day.day_version} · ${day.record_count} 条记录 · ${digestInfo}${issues}</div>
+          </div>
+          <div class="day-actions">
+            <button type="button" class="ghost" data-verify="${day.date}">核验详情</button>
+          </div>
+        `;
+        row
+          .querySelector("[data-verify]")
+          .addEventListener("click", () => showIntegrityDetail(day.date));
+        holder.appendChild(row);
+      });
+    } catch (error) {
+      holder.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "empty";
+      p.textContent = `核验失败：${error.message}`;
+      holder.appendChild(p);
+    }
+  }
+
+  async function showIntegrityDetail(day) {
+    const panel = $("#integrity-detail");
+    const title = $("#integrity-title");
+    const subtitle = $("#integrity-subtitle");
+    const banner = $("#integrity-banner");
+    const versionsBody = $("#integrity-versions-table tbody");
+    const issuesPanel = $("#integrity-issues-panel");
+    const issuesHolder = $("#integrity-issues");
+    try {
+      const response = await fetch(`/api/integrity/${day}`);
+      const data = await readJson(response);
+      if (!response.ok) throw new Error((data && data.message) || "无法读取核验结果");
+
+      title.textContent = `${formatDate(day)} · 完整性核验`;
+      subtitle.textContent =
+        `日版本 v${data.day_version} · 当前 ${data.record_count} 条记录 · ` +
+        `核验时间 ${new Date(data.checked_at).toLocaleString()}`;
+
+      banner.hidden = false;
+      banner.classList.remove("success", "error", "warn");
+      if (data.status === "ok") {
+        banner.classList.add("success");
+        banner.innerHTML =
+          `<div class="alert-head"><strong>核验通过</strong></div>` +
+          `<p>当前数据与版本 v${data.digest_version} 发布时留存的摘要一致，可继续供分析使用。</p>`;
+      } else if (data.status === "mismatch") {
+        banner.classList.add("error");
+        banner.innerHTML =
+          `<div class="alert-head"><strong>核验未通过：数据疑似被改动</strong></div>` +
+          `<p>${escapeHtml(INTEGRITY_REASONS[data.reason] || data.reason || "")}。` +
+          `该日读数已锁定，按日查询与下载暂不可用作正常数据；请先排查并恢复后再发布补报。</p>`;
+      } else if (data.status === "unverified") {
+        banner.classList.add("warn");
+        banner.innerHTML =
+          `<div class="alert-head"><strong>未核验</strong></div>` +
+          `<p>${escapeHtml(INTEGRITY_REASONS[data.reason] || data.reason || "")}。` +
+          `后续成功补报会为当时的新版本建立摘要，但不会追溯认定旧版本通过。</p>`;
+      } else {
+        banner.classList.add("warn");
+        banner.innerHTML =
+          `<div class="alert-head"><strong>无数据</strong></div><p>该日没有已发布记录。</p>`;
+      }
+
+      versionsBody.innerHTML = "";
+      const versions = data.versions || [];
+      $("#integrity-no-versions").hidden = versions.length > 0;
+      versions.forEach((version) => {
+        const tr = document.createElement("tr");
+        const current =
+          version.version === data.digest_version && data.status !== "unverified"
+            ? ' <span class="badge add">当前比对版本</span>'
+            : "";
+        tr.innerHTML = `
+          <td class="num mono">v${version.version}${current}</td>
+          <td class="num mono">${version.record_count}</td>
+          <td class="mono">${escapeHtml(version.digest.slice(0, 16))}…</td>
+          <td class="mono">${new Date(version.created_at).toLocaleString()}</td>
+        `;
+        versionsBody.appendChild(tr);
+      });
+
+      const issues = data.issues || [];
+      issuesPanel.hidden = issues.length === 0;
+      issuesHolder.innerHTML = "";
+      issues.forEach((issue) => {
+        const item = document.createElement("div");
+        item.className = "conflict-item";
+        const where =
+          issue.station !== null && issue.station !== undefined
+            ? `<strong>${escapeHtml(issue.station)} · ${escapeHtml(issue.hour)}:00</strong><br>`
+            : "";
+        let current = "";
+        if (issue.current) {
+          current =
+            `<span class="old">库中现状：r${issue.current.revision} · ` +
+            `<code>${escapeHtml(issue.current.value)}</code> · 批次 ${escapeHtml(
+              issue.current.batch_id
+            )}</span>`;
+        }
+        item.innerHTML =
+          `${where}${escapeHtml(ISSUE_LABELS[issue.issue] || issue.issue)}${current}`;
+        issuesHolder.appendChild(item);
+      });
+
+      panel.hidden = false;
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      title.textContent = `${formatDate(day)} · 核验失败`;
+      subtitle.textContent = error.message;
+      banner.hidden = true;
+      versionsBody.innerHTML = "";
+      issuesPanel.hidden = true;
+      panel.hidden = false;
+    }
+  }
+
+  $("#refresh-integrity").addEventListener("click", loadIntegrity);
+
   document.querySelectorAll(".nav-link").forEach((link) => {
     link.addEventListener("click", () => {
       document.querySelectorAll(".nav-link").forEach((node) => node.classList.remove("active"));
       link.classList.add("active");
       if (link.getAttribute("href") === "#published") loadDays();
+      if (link.getAttribute("href") === "#integrity") loadIntegrity();
     });
   });
 
@@ -557,4 +739,5 @@
 
   finishUploadState();
   loadDays();
+  loadIntegrity();
 })();
