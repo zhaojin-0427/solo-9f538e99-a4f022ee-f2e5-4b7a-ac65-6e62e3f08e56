@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PM2.5 小时观测发布</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">PM<sub>2.5</sub></span>
+      <div>
+        <h1>小时观测发布台</h1>
+        <p>按日上传 · 预览校验 · 确认发布</p>
+      </div>
+    </div>
+    <nav class="nav" aria-label="主导航">
+      <a href="#upload" class="nav-link active">上传与预览</a>
+      <a href="#published" class="nav-link">已发布数据</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="upload" class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>1 · 上传单日 CSV</h2>
+          <p class="hint">文件需包含站点、整点时间、修订号和数值。每次仅限一个观测日期。</p>
+        </div>
+        <button type="button" id="sample-btn" class="ghost">下载示例 CSV</button>
+      </div>
+
+      <form id="upload-form" class="upload-form">
+        <label id="dropzone" class="dropzone" for="file-input">
+          <input id="file-input" name="file" type="file" accept=".csv,text/csv" hidden>
+          <span class="drop-icon" aria-hidden="true">↑</span>
+          <span class="drop-title" id="drop-title">选择或拖入 CSV 文件</span>
+          <span class="drop-sub">最大 5 MiB · UTF-8 / GB18030 · 支持逗号、分号、制表符分隔</span>
+        </label>
+        <div class="upload-actions">
+          <button type="submit" id="preview-btn" class="primary" disabled>生成预览</button>
+          <span id="upload-status" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+
+      <div id="format-error" class="alert error" hidden>
+        <div class="alert-head">
+          <strong>整批未通过格式校验</strong>
+          <button type="button" class="alert-close" aria-label="关闭">×</button>
+        </div>
+        <p id="format-error-message"></p>
+        <ul id="format-error-list" class="error-list"></ul>
+      </div>
+    </section>
+
+    <section id="preview-panel" class="panel" hidden>
+      <div class="panel-head">
+        <div>
+          <h2>2 · 预览结果</h2>
+          <p class="hint">确认前请核对新增、替换、忽略与冲突记录。</p>
+        </div>
+        <div id="preview-meta" class="meta-chips"></div>
+      </div>
+
+      <div class="counts" id="counts" aria-label="记录分类统计"></div>
+
+      <div id="conflict-banner" class="alert error" hidden>
+        <div class="alert-head"><strong>本批次存在冲突，整批已拒绝</strong></div>
+        <p>同站同小时出现修订号相同但数值不同的记录。请修正源文件后重新上传，已发布数据未受影响。下方分类仅说明若不拒绝时的处理结果，本批不会写入任何记录。</p>
+        <div id="conflict-list" class="conflict-list"></div>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="记录分类">
+        <button role="tab" class="tab active" data-action="all" aria-selected="true">全部 <span class="tab-count" data-count="all">0</span></button>
+        <button role="tab" class="tab" data-action="add" aria-selected="false">新增 <span class="tab-count" data-count="added">0</span></button>
+        <button role="tab" class="tab" data-action="replace" aria-selected="false">替换 <span class="tab-count" data-count="replaced">0</span></button>
+        <button role="tab" class="tab" data-action="ignore" aria-selected="false">忽略 <span class="tab-count" data-count="ignored">0</span></button>
+        <button role="tab" class="tab" data-action="conflict" aria-selected="false">冲突 <span class="tab-count" data-count="conflicts">0</span></button>
+      </div>
+
+      <div class="table-wrap">
+        <table id="records-table">
+          <thead>
+            <tr>
+              <th>站点</th>
+              <th>整点时间</th>
+              <th class="num">修订号</th>
+              <th class="num">数值</th>
+              <th>分类</th>
+              <th>说明 / 原记录</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p id="empty-records" class="empty" hidden>此分类下没有记录。</p>
+      </div>
+
+      <div class="confirm-bar">
+        <button type="button" id="confirm-btn" class="primary" disabled>确认发布</button>
+        <span id="confirm-status" class="status" role="status" aria-live="polite"></span>
+      </div>
+
+      <div id="publish-result" class="alert success" hidden>
+        <div class="alert-head"><strong id="publish-result-title">发布成功</strong></div>
+        <p id="publish-result-text"></p>
+      </div>
+
+      <div id="stale-banner" class="alert warn" hidden>
+        <div class="alert-head"><strong>预览已失效</strong></div>
+        <p>该日数据已被另一人更新。为防止覆盖他人的发布，此预览不能确认。请重新上传日 CSV 并从最新状态生成预览。</p>
+      </div>
+    </section>
+
+    <section id="published" class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>已发布数据</h2>
+          <p class="hint">按日读取已发布的 JSON 记录，可直接供下游分析使用。</p>
+        </div>
+        <button type="button" id="refresh-days" class="ghost">刷新列表</button>
+      </div>
+      <div id="days-list" class="days-list"><p class="empty">正在加载…</p></div>
+
+      <div id="day-viewer" hidden>
+        <div class="panel-head sub">
+          <div>
+            <h3 id="day-title"></h3>
+            <p class="hint" id="day-subtitle"></p>
+          </div>
+          <div class="day-actions">
+            <button type="button" id="copy-json" class="ghost">复制 JSON</button>
+            <a id="download-json" class="ghost" download>下载 JSON</a>
+            <a id="open-json" class="ghost" target="_blank" rel="noopener">打开 API</a>
+          </div>
+        </div>
+        <pre id="day-json" class="json-view"></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>同站同小时以最高修订号为准 · 同修订号数值不一致则整批拒绝 · 发布为原子事务</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

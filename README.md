@@ -1,0 +1,109 @@
+# PM2.5 小时观测发布台
+
+站点小时 PM2.5 观测的单日 CSV 上传、预览确认与按日 JSON 发布服务。
+后端 FastAPI + SQLite，前端为同源静态页面，无外部前端依赖。
+
+## 启动
+
+```bash
+docker compose up --build
+```
+
+浏览器打开 <http://localhost:8000>。数据保存在命名卷 `pm25-data`（`/data/pm25.db`），
+`docker compose down` 不会删除数据；需清空时使用 `docker compose down -v`。
+
+不使用 Docker 时：
+
+```bash
+python3 -m pip install -r requirements.txt
+PM25_DB_PATH=./data/pm25.db uvicorn app.main:app --reload
+```
+
+测试：
+
+```bash
+python3 -m pip install -r requirements.txt -r requirements-dev.txt
+python3 -m pytest
+```
+
+测试覆盖：格式错误整批拒绝、批内最高修订号、同修订号冲突、已发布修订号冲突、
+预览跨发布失效、并发确认只有一个成功、重复确认幂等、发布中途失败回滚。
+
+## CSV 格式
+
+单次上传只允许一个观测日期。表头必须包含四列（支持中英文别名，列顺序不限）：
+
+| 列 | 别名示例 | 要求 |
+| --- | --- | --- |
+| 站点 | `station`、`站点` | 非空文本，≤120 字符 |
+| 整点时间 | `timestamp`、`整点时间` | ISO 整点（`2026-11-13T05:00:00`）；也可配 `date` 列用 `05:00`。接受省略秒、以 `Z`/`+00:00` 结尾、小数秒为 0 的形式 |
+| 修订号 | `revision`、`修订号` | 非负整数 |
+| 数值 | `value`、`pm2.5`、`数值` | 非负有限数字，最多 9 位小数，规范化为普通十进制 |
+
+可选 `date` 列（`2026-11-13`）。支持 UTF-8（含 BOM）与 GB18030，分隔符可为逗号、分号、
+制表符或竖线；按内容自动识别。文件上限 5 MiB / 20,000 行。
+
+示例：
+
+```csv
+station,timestamp,revision,value
+SY-001,2026-11-13T00:00:00,1,12.4
+SY-001,2026-11-13T01:00:00,1,10.8
+SY-001,2026-11-13T01:00:00,2,11.2
+SY-002,2026-11-13T00:00:00,3,18.0
+```
+
+## 规则
+
+- **同站同小时以最高修订号为准。** 批内低修订号标记为“忽略（superseded_in_batch）”，
+  同修订号的重复行标记为“忽略（duplicate_in_batch）”。
+- **同修订号数值不一致则整批拒绝。** 包括：批内同一键同一修订号对应不同数值；以及上传值
+  与已发布记录修订号相同但数值不同。此时返回 `409 batch_conflict`，不创建可确认的预览，
+  不写入任何数据。展示出的新增/替换只是“若无冲突将会执行”的分类结果。
+- **相对已发布数据：** 更高修订号 → “替换”；相同修订号且数值相同 → “忽略（already_published）”；
+  更低修订号 → “忽略（older_than_published）”，不会覆盖既有记录。
+- 新增与替换记录合计为“待发布”；无待发布记录时确认按钮不可用。
+
+## 预览与失效
+
+`POST /api/previews` 解析 CSV、按日版本号生成快照并写入预览表（不修改已发布数据）。
+每日维护一个 `day_version`，每次成功发布递增。确认时以 `BEGIN IMMEDIATE` 锁库并核对
+`day_version`：如果预览生成后该日已被他人发布，旧预览立即返回 `409 preview_stale`，
+且不会再被写入。被判定失效的预览永久保持 `stale`，需重新上传生成新预览。
+
+## 发布语义
+
+- 确认在单个 SQLite 事务内完成：写入全部待发布记录、递增日版本、标记预览已发布。
+  任一步失败整体回滚，不影响已发布记录，预览保持可重试的 `preview` 状态。
+- 同一预览重复确认不会再次发布：已发布时返回 `200`、`already_published: true`，并回放
+  首次发布结果；数据与日版本均不变。
+- 格式错误不创建预览，也不触碰已发布数据。
+
+## API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/` | 上传与浏览页面 |
+| `GET` | `/api/health` | 健康检查 |
+| `POST` | `/api/previews` | 上传 CSV（`multipart/form-data`，字段 `file`），`201` 返回预览 |
+| `GET` | `/api/previews/{id}` | 读取预览及当前状态 |
+| `POST` | `/api/previews/{id}/confirm` | 确认发布（幂等） |
+| `GET` | `/api/days` | 已发布日期列表 |
+| `GET` | `/api/days/{YYYY-MM-DD}` | 该日已发布 JSON |
+| `GET` | `/api/days/{YYYY-MM-DD}.json` | 同上，附件下载 |
+
+按日查询响应：
+
+```json
+{
+  "date": "2026-11-13",
+  "day_version": 1,
+  "count": 2,
+  "records": [
+    {"station": "SY-001", "hour": "01:00", "timestamp": "2026-11-13T01:00:00",
+     "revision": 2, "value": "11.2", "batch_id": "...", "updated_at": "..."}
+  ]
+}
+```
+
+数值以规范化字符串返回，避免二进制浮点误差；下游按需自行转 `float`/`Decimal`。

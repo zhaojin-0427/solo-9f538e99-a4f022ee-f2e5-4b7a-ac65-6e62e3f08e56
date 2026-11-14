@@ -1,0 +1,24 @@
+services:
+  pm25:
+    build: .
+    image: pm25-hourly-publisher:latest
+    ports:
+      - "8000:8000"
+    environment:
+      PM25_DB_PATH: /data/pm25.db
+    volumes:
+      - pm25-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  pm25-data:
